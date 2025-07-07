@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Panchabyanjan KDS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f4f4f4;
+      padding: 10px;
+    }
+    h1 {
+      text-align: center;
+      background: #ff5722;
+      color: white;
+      padding: 10px;
+    }
+    .kot-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      justify-content: center;
+    }
+    .kot-card {
+      background: white;
+      border: 2px solid #ff9800;
+      border-radius: 8px;
+      padding: 15px;
+      width: 300px;
+      box-shadow: 2px 2px 6px rgba(0,0,0,0.1);
+    }
+    .kot-card h2 {
+      margin: 0 0 5px;
+      font-size: 18px;
+      color: #e65100;
+    }
+    .kot-card small {
+      color: gray;
+    }
+    .item {
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ready {
+      color: green;
+      font-weight: bold;
+    }
+    button.mark-ready {
+      padding: 5px 8px;
+      background: green;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    .download-btn {
+      display: block;
+      margin: 10px auto;
+      background: #009688;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      font-size: 14px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>Kitchen Display - Panchabyanjan</h1>
+  <button class="download-btn" onclick="downloadKOTReportCSV()">📥 Download KOT Report (Date Range)</button>
+  <audio id="kotSound" src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" preload="auto"></audio>
+  <div class="kot-container" id="kotList"></div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyBFLzo4TB3wvnUzzriyB3oY4Grw8FMPmXY",
+  authDomain: "panchabyanjan-billing-7ca90.firebaseapp.com",
+  databaseURL: "https://panchabyanjan-billing-7ca90-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "panchabyanjan-billing-7ca90",
+  storageBucket: "panchabyanjan-billing-7ca90.firebasestorage.app",
+  messagingSenderId: "892887228821",
+  appId: "1:892887228821:web:96af9e50282ddfc672569c"
+
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const audio = document.getElementById("kotSound");
+    function playKOTSound() {
+      audio.currentTime = 0;
+      const promise = audio.play();
+      if (promise !== undefined) {
+        promise.then(() => setTimeout(() => audio.pause(), 5000)).catch(() => {});
+      }
+    }
+
+    db.ref("kots").on("value", snapshot => {
+      const allKOTs = snapshot.val() || {};
+      const kotList = document.getElementById("kotList");
+      kotList.innerHTML = "";
+
+      const currentKOTs = Object.keys(allKOTs);
+      const lastKOTs = window.lastKotIds || [];
+      const newDetected = currentKOTs.some(id => !lastKOTs.includes(id));
+      window.lastKotIds = currentKOTs;
+      if (newDetected) playKOTSound();
+
+      Object.entries(allKOTs).reverse().forEach(([kotId, kot]) => {
+        const items = kot.items || [];
+        const readyMap = kot.readyItems || {};
+
+        const allReady = items.every(line => {
+          const match = line.match(/^(.*?) \\(x\\d+\\)/);
+          const itemName = match ? match[1] : line;
+          return readyMap[itemName];
+        });
+        if (allReady) return;
+
+        const card = document.createElement("div");
+        card.className = "kot-card";
+        const kotTime = new Date(kot.createdAt).toLocaleString();
+        card.innerHTML = `
+          <h2>KOT #${kot.kotNo}</h2>
+          <small>Bill #${kot.billNo} • ${kotTime}</small>
+          <div id="items-${kotId}"></div>
+        `;
+
+        const itemsDiv = card.querySelector(`#items-${kotId}`);
+        items.forEach(itemLine => {
+          const match = itemLine.match(/^(.*?) \\(x\\d+\\)/);
+          const itemName = match ? match[1] : itemLine;
+          const readyTime = readyMap[itemName];
+
+          const itemDiv = document.createElement("div");
+          itemDiv.className = "item";
+
+          if (readyTime) {
+            const readyFormatted = new Date(readyTime).toLocaleTimeString();
+            itemDiv.innerHTML = `
+              <span>${itemLine}</span>
+              <span class="ready">✅ ${readyFormatted}</span>
+            `;
+          } else {
+            itemDiv.innerHTML = `
+              <span>${itemLine}</span>
+              <button class="mark-ready" onclick="markReady('${kotId}', '${itemName}')">Mark Ready</button>
+            `;
+          }
+          itemsDiv.appendChild(itemDiv);
+        });
+
+        kotList.appendChild(card);
+      });
+    });
+
+    function markReady(kotId, itemName) {
+      const now = new Date().toISOString();
+      db.ref(`kots/${kotId}/readyItems/${itemName}`).set(now);
+    }
+
+    function downloadKOTReportCSV() {
+      const from = prompt("From Date (YYYY-MM-DD)");
+      const to = prompt("To Date (YYYY-MM-DD)");
+      if (!from || !to) return;
+
+      db.ref("kots").once("value", snapshot => {
+        const data = snapshot.val() || {};
+        const rows = [["KOT No", "Bill No", "KOT Time", "Item", "Ready Time"]];
+
+        Object.values(data).forEach(kot => {
+          const kotDate = kot.createdAt?.split("T")[0];
+          if (kotDate >= from && kotDate <= to) {
+            const kotTime = new Date(kot.createdAt).toLocaleString();
+            const readyMap = kot.readyItems || {};
+
+            kot.items.forEach(line => {
+              const match = line.match(/^(.*?) \\(x\\d+\\)/);
+              const itemName = match ? match[1] : line;
+              const ready = readyMap[itemName]
+                ? new Date(readyMap[itemName]).toLocaleString()
+                : "Not Ready";
+              rows.push([kot.kotNo, kot.billNo, kotTime, line, ready]);
+            });
+          }
+        });
+
+        const csv = rows.map(r => r.join(",")).join("\n");
+        const blob = new Blob([csv], { type: "text/csv" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `KOT_Report_${from}_to_${to}.csv`;
+        link.click();
+      });
+    }
+  </script>
+</body>
+</html>
